@@ -1,6 +1,7 @@
 # Claude Connect - Anthropic API Proxy
 
-Follow me for more AI & dev content! [![TikTok](https://img.shields.io/badge/TikTok-@vibinwiththechef-ff0050?logo=tiktok&logoColor=white)](https://www.tiktok.com/@vibinwiththechef)
+Follow me for more AI & dev content!
+[![TikTok](https://img.shields.io/badge/TikTok-@vibinwiththechef-ff0050?logo=tiktok&logoColor=white)](https://www.tiktok.com/@vibinwiththechef)
 
 A universal proxy server that translates Anthropic API requests to OpenAI-compatible format, allowing Claude Code to work with any OpenAI-compatible API endpoint.
 
