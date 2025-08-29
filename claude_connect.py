@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Anthropic API to LM Studio Proxy Server
+Anthropic to OpenAI API Proxy Server
 
-This proxy translates Anthropic API requests to LM Studio format,
-allowing Claude Code to work with local LLMs.
+This proxy translates Anthropic API requests to OpenAI-compatible format,
+allowing Claude Code to work with any OpenAI-compatible API.
+
+Supports: OpenAI, Azure OpenAI, LM Studio, Ollama, vLLM, Together AI, etc.
 """
 
 import json
@@ -24,7 +26,8 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # Configuration
-LM_STUDIO_BASE_URL = "http://localhost:1234"  # Default LM Studio port
+OPENAI_BASE_URL = "http://localhost:1234"  # Default LM Studio port
+OPENAI_API_KEY = None  # Set this if the backend requires authentication
 PROXY_PORT = 8080
 
 class AnthropicMessage(BaseModel):
@@ -78,11 +81,27 @@ def convert_anthropic_to_openai(anthropic_req: Dict[str, Any]) -> Dict[str, Any]
             "content": content
         })
     
+    # Get model from environment or use a default
+    import os
+    model = os.getenv("OPENAI_MODEL", "gpt-4o")  # Default to gpt-4o
+    
+    # Handle max_tokens based on model limits
+    max_tokens = anthropic_req.get("max_tokens", 4096)
+    
+    # OpenAI models have different completion token limits
+    if "gpt-4" in model.lower():
+        max_tokens = min(max_tokens, 16384)  # GPT-4 models support max 16k completion tokens
+    elif "gpt-3.5" in model.lower():
+        max_tokens = min(max_tokens, 4096)  # GPT-3.5 supports max 4k completion tokens
+    
+    logger.info(f"Original max_tokens: {anthropic_req.get('max_tokens')}, Capped to: {max_tokens}")
+    
     # Build OpenAI request
     openai_req = {
+        "model": model,  # Add model field - REQUIRED for OpenAI
         "messages": openai_messages,
         "temperature": anthropic_req.get("temperature", 1.0),
-        "max_tokens": anthropic_req.get("max_tokens", 4096),
+        "max_tokens": max_tokens,
         "top_p": anthropic_req.get("top_p", 1.0),
         "stream": anthropic_req.get("stream", False)
     }
@@ -167,62 +186,95 @@ async def convert_stream_chunk(chunk: str) -> Optional[str]:
 
 @app.post("/v1/messages")
 @app.post("/messages")
-async def create_message(request: Request):
+async def create_message(request: Request, beta: bool = False):
     """Handle Anthropic Messages API requests."""
     
     try:
+        # Log the auth header for debugging (but hide most of the key)
+        auth_header = request.headers.get("authorization", "")
+        api_key = request.headers.get("x-api-key", "")
+        if auth_header:
+            logger.info(f"Auth header present: {auth_header[:20]}...")
+        if api_key:
+            logger.info(f"X-API-Key present: {api_key[:20]}...")
+        
         # Parse the incoming Anthropic request
         anthropic_req = await request.json()
-        logger.info(f"Received Anthropic request: {json.dumps(anthropic_req, indent=2)}")
+        logger.info(f"Received Anthropic request for model: {anthropic_req.get('model', 'not specified')}")
+        
+        # Convert to OpenAI format
+        openai_req = convert_anthropic_to_openai(anthropic_req)
+        logger.info(f"Sending to OpenAI with model: {openai_req.get('model')}")
+        logger.info(f"Message count: {len(openai_req.get('messages', []))}")
+        logger.info(f"Max tokens: {openai_req.get('max_tokens')}")
         
         # Convert to OpenAI format
         openai_req = convert_anthropic_to_openai(anthropic_req)
         logger.info(f"Converted to OpenAI format: {json.dumps(openai_req, indent=2)}")
         
-        # Forward to LM Studio
+        # Forward to OpenAI-compatible backend
+        headers = {}
+        if OPENAI_API_KEY:
+            headers["Authorization"] = f"Bearer {OPENAI_API_KEY}"
+            logger.info(f"Adding auth header: Bearer {OPENAI_API_KEY[:15]}...")
+        else:
+            logger.warning("No OPENAI_API_KEY set - sending request without authentication")
+        
         async with httpx.AsyncClient() as client:
             if anthropic_req.get("stream", False):
                 # Handle streaming
                 async def stream_generator():
-                    async with client.stream(
-                        "POST",
-                        f"{LM_STUDIO_BASE_URL}/v1/chat/completions",
-                        json=openai_req,
-                        timeout=None
-                    ) as response:
-                        # Send initial message start event
-                        start_event = {
-                            "type": "message_start",
-                            "message": {
-                                "id": "msg_" + str(hash(str(anthropic_req)))[:8],
-                                "type": "message",
-                                "role": "assistant",
-                                "content": [],
-                                "model": anthropic_req.get("model", "unknown"),
-                                "usage": {
-                                    "input_tokens": 0,
-                                    "output_tokens": 0
+                    try:
+                        async with client.stream(
+                            "POST",
+                            f"{OPENAI_BASE_URL}/v1/chat/completions",
+                            json=openai_req,
+                            headers=headers,
+                            timeout=None
+                        ) as response:
+                            # Send initial message start event
+                            start_event = {
+                                "type": "message_start",
+                                "message": {
+                                    "id": "msg_" + str(hash(str(anthropic_req)))[:8],
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "content": [],
+                                    "model": anthropic_req.get("model", "unknown"),
+                                    "usage": {
+                                        "input_tokens": 0,
+                                        "output_tokens": 0
+                                    }
                                 }
                             }
-                        }
-                        yield f"data: {json.dumps(start_event)}\n\n"
-                        
-                        # Send content block start
-                        content_start = {
-                            "type": "content_block_start",
-                            "index": 0,
-                            "content_block": {
-                                "type": "text",
-                                "text": ""
+                            yield f"data: {json.dumps(start_event)}\n\n"
+                            
+                            # Send content block start
+                            content_start = {
+                                "type": "content_block_start",
+                                "index": 0,
+                                "content_block": {
+                                    "type": "text",
+                                    "text": ""
+                                }
+                            }
+                            yield f"data: {json.dumps(content_start)}\n\n"
+                            
+                            async for line in response.aiter_lines():
+                                if line:
+                                    converted = await convert_stream_chunk(line)
+                                    if converted:
+                                        yield converted
+                    except Exception as e:
+                        logger.error(f"Error in streaming: {e}")
+                        error_event = {
+                            "type": "error",
+                            "error": {
+                                "type": "internal_server_error",
+                                "message": str(e)
                             }
                         }
-                        yield f"data: {json.dumps(content_start)}\n\n"
-                        
-                        async for line in response.aiter_lines():
-                            if line:
-                                converted = await convert_stream_chunk(line)
-                                if converted:
-                                    yield converted
+                        yield f"data: {json.dumps(error_event)}\n\n"
                 
                 return StreamingResponse(
                     stream_generator(),
@@ -231,10 +283,18 @@ async def create_message(request: Request):
             else:
                 # Handle non-streaming
                 response = await client.post(
-                    f"{LM_STUDIO_BASE_URL}/v1/chat/completions",
+                    f"{OPENAI_BASE_URL}/v1/chat/completions",
                     json=openai_req,
+                    headers=headers,
                     timeout=None
                 )
+                
+                # Log the response if it's an error
+                if response.status_code != 200:
+                    logger.error(f"Backend returned {response.status_code}")
+                    logger.error(f"Response body: {response.text}")
+                    logger.error(f"Request that caused error: {json.dumps(openai_req, indent=2)}")
+                
                 response.raise_for_status()
                 
                 openai_resp = response.json()
@@ -247,14 +307,37 @@ async def create_message(request: Request):
                 return JSONResponse(content=anthropic_resp)
                 
     except httpx.RequestError as e:
-        logger.error(f"Error connecting to LM Studio: {e}")
-        raise HTTPException(status_code=502, detail=f"Error connecting to LM Studio: {str(e)}")
+        logger.error(f"Error connecting to backend: {e}")
+        raise HTTPException(status_code=502, detail=f"Error connecting to backend: {str(e)}")
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health")
-async def health_check():
+@app.post("/v1/complete")
+async def complete_endpoint(request: Request):
+    """Handle legacy completion endpoint if Claude Code uses it."""
+    return await create_message(request)
+
+@app.get("/v1/models")
+async def list_models():
+    """Return a list of available models to satisfy API checks."""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "claude-3-opus-20240229",
+                "object": "model",
+                "created": 1677610602,
+                "owned_by": "anthropic"
+            }
+        ]
+    }
+
+@app.post("/v1/messages/check")
+@app.get("/v1/messages/check")
+async def check_api_key():
+    """Endpoint to validate API key if Claude Code checks it."""
+    return {"valid": True}
     """Health check endpoint."""
     # Try to check if LM Studio is responsive
     try:
@@ -274,24 +357,34 @@ async def health_check():
 async def root():
     """Root endpoint with usage instructions."""
     return {
-        "message": "Anthropic to LM Studio Proxy",
+        "message": "Anthropic to OpenAI Proxy",
         "usage": "Configure Claude Code to use http://localhost:8080 as the API endpoint",
         "health_check": "/health",
-        "lm_studio_backend": LM_STUDIO_BASE_URL
+        "backend": OPENAI_BASE_URL,
+        "backend_authenticated": bool(OPENAI_API_KEY)
     }
 
 if __name__ == "__main__":
+    # Allow configuration via environment variables
+    import os
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL)
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", OPENAI_API_KEY)
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")  # Add model configuration
+    PROXY_PORT = int(os.getenv("PROXY_PORT", PROXY_PORT))
+    
     print(f"""
     ╔══════════════════════════════════════════════════════════╗
-    ║       Anthropic to LM Studio Proxy Server               ║
+    ║       Anthropic to OpenAI Proxy Server                  ║
     ╠══════════════════════════════════════════════════════════╣
     ║  Proxy running on: http://localhost:{PROXY_PORT:<5}                 ║
-    ║  LM Studio URL:    {LM_STUDIO_BASE_URL:<38}║
+    ║  Backend URL:      {OPENAI_BASE_URL:<38}║
+    ║  Model:            {OPENAI_MODEL:<38}║
+    ║  Authentication:   {"Enabled" if OPENAI_API_KEY else "Disabled":<38}║
     ║                                                          ║
     ║  Configure Claude Code to use:                          ║
-    ║  API URL: http://localhost:{PROXY_PORT}          ║
+    ║  ANTHROPIC_BASE_URL=http://localhost:{PROXY_PORT:<5}            ║
     ║                                                          ║
-    ║  Make sure LM Studio is running with a model loaded!    ║
+    ║  Make sure your backend is running!                     ║
     ╚══════════════════════════════════════════════════════════╝
     """)
     

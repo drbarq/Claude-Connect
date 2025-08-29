@@ -1,171 +1,156 @@
-# Anthropic API to LM Studio Proxy
+# Claude Connect - Anthropic API Proxy
 
-A lightweight proxy server that translates Anthropic Claude API requests to LM Studio's OpenAI-compatible format, enabling Claude Code and other Anthropic API clients to work seamlessly with local LLMs.
+A universal proxy server that translates Anthropic API requests to OpenAI-compatible format, allowing Claude Code to work with any OpenAI-compatible API endpoint.
 
-## Features
+## What This Does
 
-- **API Translation**: Converts Anthropic Messages API format to OpenAI/LM Studio format
-- **Streaming Support**: Full support for streaming responses
-- **Role Mapping**: Automatically maps Anthropic roles (`human`) to OpenAI roles (`user`)
-- **System Messages**: Preserves system prompts across API formats
-- **Health Monitoring**: Built-in health check endpoint to verify LM Studio connectivity
-- **Comprehensive Logging**: Detailed request/response logging for debugging
+This proxy lets you use Claude Code with different AI providers by translating Anthropic's message format to OpenAI's format. You can switch between providers just by changing environment variables.
 
-## Requirements
+**Supported Providers:**
+
+- OpenAI (GPT-4, GPT-3.5, etc.)
+- Azure OpenAI
+- LM Studio (local models)
+- Ollama
+- vLLM
+- Together AI
+- Any OpenAI-compatible API
+
+## Setup
+
+### Requirements
 
 - Python 3.7+
-- LM Studio running locally with a loaded model
-- Required Python packages:
-  - `fastapi`
-  - `httpx`
-  - `uvicorn`
-  - `pydantic`
+- FastAPI and dependencies (install with `pip install fastapi uvicorn httpx pydantic`)
 
-## Installation
+### Configuration
 
-1. Clone this repository:
+The proxy is configured using environment variables:
 
-```bash
-git clone <repository-url>
-cd anthropic_api
-```
+- `OPENAI_BASE_URL` - Where to forward requests
+- `OPENAI_API_KEY` - Authentication key (if needed)
+- `OPENAI_MODEL` - Which model to use
+- `PROXY_PORT` - Port for the proxy server (default: 8080)
 
-2. Install dependencies:
+## Provider Configuration Examples
+
+### For OpenAI
 
 ```bash
-pip install fastapi httpx uvicorn pydantic
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export OPENAI_API_KEY="sk-proj-YOUR-KEY"
+export OPENAI_MODEL="gpt-4o"
 ```
 
-## Configuration
-
-### Environment Variables
-
-Set the following environment variables for Claude Code integration:
+### For LM Studio (Local)
 
 ```bash
-export ANTHROPIC_BASE_URL=http://localhost:8080
-export ANTHROPIC_AUTH_TOKEN=sk-7a9c3f8e2b4d6a1e9f5c8b3d7e2a4c6f
-export API_TIMEOUT_MS=600000
-export ANTHROPIC_MODEL={NAME_OF_MODEL_FROM_LM_STUDIO}
-export ANTHROPIC_SMALL_FAST_MODEL={NAME_OF_MODEL_FROM_LM_STUDIO}
+export OPENAI_BASE_URL="http://localhost:1234/v1"
+export OPENAI_API_KEY=""
+export OPENAI_MODEL="local-model"
 ```
 
-Note: The auth token can be any value as LM Studio doesn't require authentication.
-
-### Proxy Settings
-
-The proxy runs on port 8080 by default and expects LM Studio on port 1234. You can modify these in `main.py`:
-
-```python
-LM_STUDIO_BASE_URL = "http://localhost:1234"  # LM Studio port
-PROXY_PORT = 8080  # Proxy server port
-```
-
-## Usage
-
-1. **Start LM Studio** and load your preferred model
-
-2. **Run the proxy server**:
+### For Together AI
 
 ```bash
-python main.py
+export OPENAI_BASE_URL="https://api.together.xyz/v1"
+export OPENAI_API_KEY="together-key-..."
+export OPENAI_MODEL="meta-llama/Llama-3-70b-chat-hf"
 ```
 
-You'll see:
+## Running the System
 
-```
-╔══════════════════════════════════════════════════════════╗
-║       Anthropic to LM Studio Proxy Server               ║
-╠══════════════════════════════════════════════════════════╣
-║  Proxy running on: http://localhost:8080                 ║
-║  LM Studio URL:    http://localhost:1234                 ║
-║                                                          ║
-║  Configure Claude Code to use:                          ║
-║  API URL: http://localhost:8080/v1/messages              ║
-║                                                          ║
-║  Make sure LM Studio is running with a model loaded!    ║
-╚══════════════════════════════════════════════════════════╝
+You'll need **2 terminals** to run this setup:
+
+### Terminal 1: Start the Proxy Server
+
+```bash
+# Set your environment variables first
+export OPENAI_BASE_URL="http://localhost:1234/v1"  # or your chosen provider
+export OPENAI_MODEL="your-model-name"
+# Add OPENAI_API_KEY if needed
+
+# Run the proxy
+python claude_connect.py
 ```
 
-3. **Configure Claude Code** or any Anthropic API client to use `http://localhost:8080` as the API endpoint
+The proxy will start on `http://localhost:8080` and display configuration information.
+
+### Terminal 2: Configure and Run Claude Code
+
+```bash
+# Configure Claude Code to use the proxy
+export ANTHROPIC_BASE_URL="http://localhost:8080"
+export ANTHROPIC_API_KEY="dummy-key"  # Can be any value since we're using the proxy
+
+# Run Claude Code
+claude-code
+```
+
+## How It Works
+
+1. **Claude Code** sends requests in Anthropic's format to the proxy
+2. **Proxy Server** translates the request to OpenAI format
+3. **Backend Provider** (OpenAI, LM Studio, etc.) processes the request
+4. **Proxy Server** translates the response back to Anthropic format
+5. **Claude Code** receives the response as if it came from Anthropic
+
+The core difference between providers is just configuration - all the translation work is handled automatically by the proxy.
+
+## Provider-Specific Setup
+
+### LM Studio
+
+1. Download and install LM Studio
+2. Load your preferred model
+3. Start the local server (usually on port 1234)
+4. Use the LM Studio configuration above
+
+### Ollama
+
+```bash
+export OPENAI_BASE_URL="http://localhost:11434/v1"
+export OPENAI_API_KEY=""
+export OPENAI_MODEL="llama2"  # or your installed model
+```
+
+### Azure OpenAI
+
+```bash
+export OPENAI_BASE_URL="https://your-resource.openai.azure.com/openai/deployments/your-deployment"
+export OPENAI_API_KEY="your-azure-key"
+export OPENAI_MODEL="gpt-4"
+```
 
 ## API Endpoints
 
 ### `/v1/messages` (POST)
 
-Main endpoint that accepts Anthropic Messages API requests and proxies them to LM Studio.
+Main endpoint that accepts Anthropic Messages API requests.
 
-**Request Format** (Anthropic):
+### `/v1/models` (GET)
 
-```json
-{
-  "model": "claude-3-opus",
-  "messages": [{ "role": "human", "content": "Hello!" }],
-  "max_tokens": 4096,
-  "temperature": 1.0,
-  "stream": false
-}
-```
-
-### `/health` (GET)
-
-Health check endpoint that verifies both proxy and LM Studio status.
-
-**Response**:
-
-```json
-{
-  "status": "healthy",
-  "lm_studio_status": "healthy",
-  "lm_studio_url": "http://localhost:1234"
-}
-```
+Returns available models for API compatibility.
 
 ### `/` (GET)
 
-Root endpoint with usage instructions.
-
-## How It Works
-
-1. **Request Reception**: The proxy receives Anthropic API requests on `/v1/messages`
-2. **Format Translation**: Converts the request to OpenAI/LM Studio compatible format:
-   - Maps `human` role to `user`
-   - Extracts system messages
-   - Handles multimodal content (extracts text)
-3. **LM Studio Communication**: Forwards the converted request to LM Studio
-4. **Response Translation**: Converts LM Studio's OpenAI-format response back to Anthropic format
-5. **Streaming Support**: For streaming requests, translates chunks in real-time
+Root endpoint with usage instructions and status.
 
 ## Troubleshooting
 
-### LM Studio Connection Issues
+- **Connection errors**: Make sure your backend provider is running and accessible
+- **Authentication errors**: Verify your API key is correct for the chosen provider
+- **Model errors**: Ensure the model name matches what's available on your provider
+- **Port conflicts**: Change `PROXY_PORT` if port 8080 is in use
 
-- Ensure LM Studio is running and has a model loaded
-- Check the health endpoint: `http://localhost:8080/health`
-- Verify LM Studio is accessible at `http://localhost:1234`
+## Features
 
-### API Format Errors
-
-- Enable debug logging to see request/response translations
-- Check that your Anthropic API client is sending properly formatted requests
-- Verify the model name in your requests
-
-### Performance Issues
-
-- For large contexts, increase the `API_TIMEOUT_MS` environment variable
-- Ensure your LM Studio model has sufficient context length
-- Monitor memory usage if running large models
-
-## Limitations
-
-- Multimodal content (images) is not supported - only text is extracted
-- Some Anthropic-specific features may not have direct LM Studio equivalents
-- Response quality depends on the underlying LM Studio model
-
-## License
-
-[Your License Here]
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
+- ✅ Request/response translation between Anthropic and OpenAI formats
+- ✅ Streaming support
+- ✅ System message handling
+- ✅ Token limit management
+- ✅ Error handling and logging
+- ✅ Health check endpoints
+- ✅ Multi-provider support
+- ✅ Role mapping (human → user)
+- ✅ Multimodal content extraction
