@@ -7,7 +7,7 @@ A universal proxy server that translates Anthropic API requests to OpenAI-compat
 
 ## TLDR
 
-You can use Claude Code CLI with ANY LLM Provider
+Use Claude Code CLI with any LLM provider - OpenAI, local models, or any OpenAI-compatible API
 
 ## What This Does
 
